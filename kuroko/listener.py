@@ -19,6 +19,11 @@ spell, changed at runtime with no retraining. Constraining the grammar to just
 the phrases we care about (plus [unk]) makes it both fast and far more accurate
 than open-vocabulary transcription.
 
+Gotcha: a grammar-constrained recognizer silently ignores words outside its
+vocabulary, so a phrase containing an unknown word never fires and never
+errors. "reachy" is exactly such a word in the small English model — check
+new phrases with `python -m probe.vocab` before trusting them.
+
 Degrades gracefully: if vosk or the model is unavailable, `available` is False
 and the bridge falls back to always-on behaviour rather than going deaf.
 """

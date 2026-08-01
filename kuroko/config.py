@@ -50,9 +50,15 @@ class KurokoConfig:
     # instead of making the user repeat themselves while it connects.
     lookback_s: float = 8.0
     catchup_rate: float = 1.15          # drain a deep buffer 15% fast, then 1x
-    wake_phrases: tuple[str, ...] = ("hey reachy", "hey mini", "okay reachy")
-    sleep_phrases: tuple[str, ...] = ("go to sleep", "goodbye reachy",
-                                      "that's all", "nevermind")
+    # NB: phrases must be spelled with words the recognizer knows, or they can
+    # never fire (run `python -m probe.vocab`). "reachy" is NOT in the small
+    # English model, so its phonetic neighbours stand in for it — say "hey
+    # reachy" out loud and the grammar snaps it to ritchie/reach/peachy.
+    wake_phrases: tuple[str, ...] = ("hey mini", "okay mini", "hey robot",
+                                     "hey ritchie", "hey richie", "hey reach",
+                                     "hey peachy", "hey beachy")
+    sleep_phrases: tuple[str, ...] = ("go to sleep", "goodbye",
+                                      "that is all", "never mind")
     conversation_idle_s: float = 45.0   # no one has spoken -> end conversation
     user_speech_level: float = 0.05     # mic peak that counts as someone talking
     catatonia_s: float = 75.0           # no model output at all -> recycle
