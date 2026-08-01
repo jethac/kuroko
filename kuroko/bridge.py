@@ -47,6 +47,7 @@ class VoiceBridge:
         self.frames_played = 0  # crude playhead in model frames
         self.stats = {"mic_chunks": 0, "tx_bytes": 0, "rx_bytes": 0, "spk_chunks": 0}
         self._mic_buf = np.zeros(0, dtype=np.float32)
+        self.handshake = asyncio.Event()
 
     # -- robot ---------------------------------------------------------------
 
@@ -80,6 +81,11 @@ class VoiceBridge:
 
     async def mic_loop(self, ws) -> None:
         loop = asyncio.get_running_loop()
+        # The server discards all incoming messages until it sends its \x00
+        # handshake (system-prompt loading). Anything sent earlier — including
+        # the opus stream header — is eaten and the stream never syncs.
+        await self.handshake.wait()
+        log.info("handshake received — mic stream starting")
         while not self.stop.is_set():
             # native call may block; keep it off the event loop
             pcm = await loop.run_in_executor(None, self.media.get_audio_sample)
@@ -112,7 +118,9 @@ class VoiceBridge:
             if not isinstance(msg, (bytes, bytearray)) or not msg:
                 continue
             kind = msg[0]
-            if kind == 1:
+            if kind == 0:
+                self.handshake.set()
+            elif kind == 1:
                 self.stats["rx_bytes"] += len(msg) - 1
                 await loop.run_in_executor(None, self.opus_r.append_bytes, bytes(msg[1:]))
             elif kind == 2:
@@ -172,6 +180,11 @@ class VoiceBridge:
         backoff = 1.0
         while not self.stop.is_set():
             try:
+                # fresh codec streams + handshake gate per session
+                self.opus_w = sphn.OpusStreamWriter(MODEL_SR)
+                self.opus_r = sphn.OpusStreamReader(MODEL_SR)
+                self._mic_buf = np.zeros(0, dtype=np.float32)
+                self.handshake = asyncio.Event()
                 async with websockets.connect(self._url(), max_size=None) as ws:
                     log.info("personaplex session open")
                     backoff = 1.0
