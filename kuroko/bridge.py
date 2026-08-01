@@ -12,8 +12,10 @@ The websocket protocol is moshi/PersonaPlex `/api/chat`:
 """
 
 import asyncio
+import json
 import logging
 import time
+import urllib.request
 from urllib.parse import quote
 
 import numpy as np
@@ -54,8 +56,23 @@ class VoiceBridge:
 
     # -- robot ---------------------------------------------------------------
 
+    def _set_speaker_volume(self) -> None:
+        if self.cfg.speaker_volume is None:
+            return
+        try:
+            req = urllib.request.Request(
+                f"http://{self.cfg.robot_host}:8000/api/volume/set",
+                data=json.dumps({"volume": self.cfg.speaker_volume}).encode(),
+                headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                log.info("speaker volume set to %d (HTTP %d)",
+                         self.cfg.speaker_volume, r.status)
+        except Exception as e:
+            log.warning("could not set speaker volume: %s", e)
+
     def connect_robot(self) -> None:
         harden_sdk()
+        self._set_speaker_volume()
         # explicit network mode: auto mode's failed localhost probe leaves
         # debris whose gc collection froze the process (see sdkfix)
         self.mini = ReachyMini(host=self.cfg.robot_host, connection_mode="network")
@@ -212,6 +229,11 @@ class VoiceBridge:
                 await asyncio.sleep(0.004)
                 continue
             out = np.asarray(pcm, dtype=np.float32)
+            if self.cfg.output_gain != 1.0:
+                out = np.clip(out * self.cfg.output_gain, -1.0, 1.0)
+            # track the level we actually emit, so "too quiet" is measurable
+            if out.size:
+                self.stats["out_rms"] = round(float(np.sqrt(np.mean(np.square(out)))), 4)
             if self.puppet is not None:
                 # v0 embodiment: energy envelope of audio just before playout.
                 # P4 replaces this with the server tap's pre-playout sidecar.

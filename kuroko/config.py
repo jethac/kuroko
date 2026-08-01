@@ -27,6 +27,13 @@ class KurokoConfig:
     prefill_ms: int = 240               # cushion before the pacer starts pulling
     max_buffer_ms: int = 600            # cap added mouth-to-ear latency
 
+    # Output level. The robot ships at volume 62, which is -23 dB on this
+    # device's mixer — audible but far too quiet for conversation across a
+    # desk. Set on connect so a fresh robot (or a daemon update) can't
+    # silently regress it. None = leave whatever the robot has.
+    speaker_volume: int | None = 95
+    output_gain: float = 1.0            # extra digital gain on model audio
+
     @classmethod
     def load(cls, path: str | None = None) -> "KurokoConfig":
         path = path or os.environ.get("KUROKO_CONFIG", "kuroko.json")
