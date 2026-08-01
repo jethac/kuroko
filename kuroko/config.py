@@ -45,7 +45,10 @@ class KurokoConfig:
     # desk. Set on connect so a fresh robot (or a daemon update) can't
     # silently regress it. None = leave whatever the robot has.
     speaker_volume: int | None = 100
-    output_gain: float = 1.0            # extra digital gain on model audio
+    # PersonaPlex output peaks around 0.36 of full scale, so with the hardware
+    # volume already maxed there is ~9 dB of digital headroom going unused.
+    # 2.2x lands peaks near 0.8; the play path clips-guards anyway.
+    output_gain: float = 2.2
 
     @classmethod
     def load(cls, path: str | None = None) -> "KurokoConfig":
@@ -65,6 +68,8 @@ class KurokoConfig:
             cfg.voice_prompt += ".pt"
         if os.environ.get("KUROKO_SPEAKER_VOLUME"):
             cfg.speaker_volume = int(os.environ["KUROKO_SPEAKER_VOLUME"])
+        if os.environ.get("KUROKO_OUTPUT_GAIN"):
+            cfg.output_gain = float(os.environ["KUROKO_OUTPUT_GAIN"])
         return cfg
 
     def save(self, path: str = "kuroko.json") -> None:

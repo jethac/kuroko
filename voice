@@ -30,6 +30,7 @@ docker run -d --name kuroko --network host --restart unless-stopped \
   -e KUROKO_ROBOT_HOST="$ROBOT" \
   -e KUROKO_VOICE_PROMPT="$VOICE" \
   ${VOLUME:+-e KUROKO_SPEAKER_VOLUME="$VOLUME"} \
+  ${KUROKO_OUTPUT_GAIN:+-e KUROKO_OUTPUT_GAIN="$KUROKO_OUTPUT_GAIN"} \
   kuroko:latest >/dev/null
 
 echo "kuroko restarted with voice=$VOICE${VOLUME:+ volume=$VOLUME}"
