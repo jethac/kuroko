@@ -45,6 +45,7 @@ class VoiceBridge:
         self.rs_down = None  # mic sr -> 24k
         self.rs_up = None    # 24k -> speaker sr
         self.frames_played = 0  # crude playhead in model frames
+        self.stats = {"mic_chunks": 0, "tx_bytes": 0, "rx_bytes": 0, "spk_chunks": 0}
 
     # -- robot ---------------------------------------------------------------
 
@@ -84,8 +85,10 @@ class VoiceBridge:
                 mono = self.rs_down.resample_chunk(mono)
             if mono.size:
                 self.opus_w.append_pcm(mono)
+                self.stats["mic_chunks"] += 1
             data = self.opus_w.read_bytes()
             if data:
+                self.stats["tx_bytes"] += len(data)
                 await ws.send(b"\x01" + data)
             await asyncio.sleep(0.001)
 
@@ -98,6 +101,7 @@ class VoiceBridge:
                 continue
             kind = msg[0]
             if kind == 1:
+                self.stats["rx_bytes"] += len(msg) - 1
                 self.opus_r.append_bytes(bytes(msg[1:]))
             elif kind == 2:
                 piece = msg[1:].decode("utf-8", errors="replace")
@@ -125,6 +129,20 @@ class VoiceBridge:
             if out.size:
                 self.media.push_audio_sample(out)
                 self.frames_played += 1
+                self.stats["spk_chunks"] += 1
+
+    def _task_died(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("loop task died: %r", exc, exc_info=exc)
+            self.stop.set()
+
+    async def _stats_loop(self) -> None:
+        while not self.stop.is_set():
+            await asyncio.sleep(5)
+            log.info("io %s", self.stats)
 
     # -- session -------------------------------------------------------------
 
@@ -143,7 +161,10 @@ class VoiceBridge:
                     log.info("personaplex session open")
                     backoff = 1.0
                     tasks = [asyncio.create_task(t) for t in
-                             (self.mic_loop(ws), self.recv_loop(ws), self.play_loop())]
+                             (self.mic_loop(ws), self.recv_loop(ws),
+                              self.play_loop(), self._stats_loop())]
+                    for t in tasks:
+                        t.add_done_callback(self._task_died)
                     await self.stop.wait()
                     for t in tasks:
                         t.cancel()
