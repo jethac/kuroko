@@ -67,6 +67,8 @@ class VoiceBridge:
         # user said while it was connecting.
         self._ring = np.zeros(0, dtype=np.float32)
         self.body: Body | None = None
+        self.wake_event = asyncio.Event()
+        self.gated = False
 
     # -- robot ---------------------------------------------------------------
 
@@ -176,16 +178,50 @@ class VoiceBridge:
             await asyncio.sleep(0.001)
 
     async def gate_loop(self) -> None:
-        """Open the model's input gate once the session has handshaked."""
+        """Hold the session warm while dormant; open the gate on wake.
+
+        Loading the voice and text prompts costs the server ~7 s, and doing it
+        *after* the wake phrase is why waking felt broken. But the serve loop
+        only steps the model when audio frames actually arrive — an open,
+        unfed session simply sits at its post-prompt state, costing nothing
+        and aging no context. So we connect and complete the handshake during
+        dormancy, and the wake phrase only has to open the gate.
+        """
         # The server discards everything until it sends its \x00 handshake
         # (system-prompt loading) — including the opus stream header.
         await self.handshake.wait()
-        # Drop the jitter buffer's startup backlog rather than shipping it as
-        # a burst the model would experience as time compression.
-        await asyncio.sleep(self.cfg.drain_seconds)
+        log.info("session warm (prompts loaded)")
+
+        if self.gated:
+            try:
+                self.mini.goto_sleep()
+            except Exception as e:  # noqa: BLE001
+                log.debug("goto_sleep: %s", e)
+            log.info("dormant — say one of %s", list(self.cfg.wake_phrases))
+            await self.wake_event.wait()
+            if not self.alive():
+                return
+            try:
+                self.mini.wake_up()
+            except Exception as e:  # noqa: BLE001
+                log.debug("wake_up: %s", e)
+
+        # No drain here: capture runs for the life of the process, so there is
+        # no per-session backlog to discard — the pre-roll IS the backlog, and
+        # we want it.
         self._mic_buf = self._preroll()
         self.last_user_speech = time.monotonic()
         self.streaming.set()
+        log.info("listening")
+
+    async def wake_loop(self) -> None:
+        """Watch for the wake phrase while the session is warm."""
+        while self.alive() and not self.wake_event.is_set():
+            if self.listener.poll() == "wake":
+                log.info("woken")
+                self.wake_event.set()
+                return
+            await asyncio.sleep(0.05)
 
     def _preroll(self) -> np.ndarray:
         """Seed a new session with what the user already said.
@@ -356,7 +392,7 @@ class VoiceBridge:
         Observed here after ~9 minutes. Detect by absence of model output and
         start a fresh session.
         """
-        await self.streaming.wait()
+        await self.streaming.wait()          # only judge an ACTIVE conversation
         self.last_activity = time.monotonic()
         session_start = time.monotonic()
         while self.alive():
@@ -407,24 +443,6 @@ class VoiceBridge:
                 f"?voice_prompt={quote(c.voice_prompt)}"
                 f"&text_prompt={quote(c.text_prompt)}")
 
-    async def wait_for_wake(self) -> None:
-        """Dormant: ears open, no model session, robot resting."""
-        log.info("dormant — say one of %s to start a conversation",
-                 list(self.cfg.wake_phrases))
-        try:
-            self.mini.goto_sleep()
-        except Exception as e:  # noqa: BLE001
-            log.debug("goto_sleep: %s", e)
-        while not self.stop.is_set():
-            if self.listener.poll() == "wake":
-                log.info("woken")
-                try:
-                    self.mini.wake_up()
-                except Exception as e:  # noqa: BLE001
-                    log.debug("wake_up: %s", e)
-                return
-            await asyncio.sleep(0.05)
-
     async def dismissal_loop(self) -> None:
         """End the conversation when dismissed — after the robot signs off.
 
@@ -469,6 +487,7 @@ class VoiceBridge:
         self.handshake.clear()
         self.streaming.clear()
         self.session_stop.clear()
+        self.wake_event.clear()
         self.end_reason = None
         if self.in_sr != MODEL_SR:
             self.rs_down = soxr.ResampleStream(self.in_sr, MODEL_SR, 1, dtype="float32")
@@ -477,8 +496,8 @@ class VoiceBridge:
             log.info("personaplex session open (voice=%s)", self.cfg.voice_prompt)
             loops = [self.gate_loop(), self.pace_loop(ws), self.recv_loop(ws),
                      self.play_loop(), self.watchdog_loop(), self._stats_loop()]
-            if self.listener.available and self.cfg.wake_enabled:
-                loops.append(self.dismissal_loop())
+            if self.gated:
+                loops += [self.wake_loop(), self.dismissal_loop()]
             tasks = [asyncio.create_task(t) for t in loops]
             for t in tasks:
                 t.add_done_callback(self._task_died)
@@ -494,8 +513,8 @@ class VoiceBridge:
         self.connect_robot()
         self.listener = PhraseListener(self.cfg.wake_phrases, self.cfg.sleep_phrases)
         self.listener.start()
-        gated = self.cfg.wake_enabled and self.listener.available
-        if not gated:
+        self.gated = self.cfg.wake_enabled and self.listener.available
+        if not self.gated:
             log.info("wake phrases unavailable — running always-on")
 
         capture = asyncio.create_task(self.capture_loop())
@@ -511,10 +530,8 @@ class VoiceBridge:
         try:
             while not self.stop.is_set():
                 try:
-                    if gated:
-                        await self.wait_for_wake()
-                        if self.stop.is_set():
-                            break
+                    # The session is opened BEFORE the wake phrase so the
+                    # server's ~7 s of prompt loading happens while dormant.
                     await self.run_session()
                     backoff = 1.0
                 except (OSError, websockets.WebSocketException) as e:
