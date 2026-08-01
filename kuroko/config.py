@@ -24,7 +24,8 @@ class KurokoConfig:
     # 0.52x-1.86x realtime second to second, plus a ~2x backlog dump on
     # connect). The bridge absorbs that so the model sees a steady stream.
     drain_seconds: float = 1.5          # discard startup backlog before streaming
-    max_buffer_ms: int = 400            # cap added mouth-to-ear latency
+    prefill_ms: int = 240               # cushion before the pacer starts pulling
+    max_buffer_ms: int = 600            # cap added mouth-to-ear latency
 
     @classmethod
     def load(cls, path: str | None = None) -> "KurokoConfig":

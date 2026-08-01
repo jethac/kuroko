@@ -138,6 +138,15 @@ class VoiceBridge:
         await self.streaming.wait()
         frame = int(MODEL_SR * FRAME_MS / 1000)   # 1920 samples @ 24 kHz
         period = FRAME_MS / 1000.0
+
+        # Build a cushion first. Without it the buffer sits near empty and every
+        # dip in the robot's delivery becomes an underrun (measured ~20%).
+        prefill = int(self.cfg.prefill_ms * MODEL_SR / 1000)
+        while self._mic_buf.size < prefill and not self.stop.is_set():
+            await asyncio.sleep(0.01)
+        log.info("jitter buffer primed (%d ms) — pacing at %.1f fps",
+                 self.cfg.prefill_ms, 1000.0 / FRAME_MS)
+
         next_deadline = loop.time()
 
         while not self.stop.is_set():
