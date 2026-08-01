@@ -31,7 +31,7 @@ and does not know it was gone.
 """
 
 import logging
-from typing import Callable, Protocol
+from typing import Callable, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -40,6 +40,7 @@ log = logging.getLogger("kuroko.control")
 MODEL_SR = 24000
 
 
+@runtime_checkable
 class SessionControl(Protocol):
     """What a driver (e.g. kōken) can do to a live kuroko session."""
 
