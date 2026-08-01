@@ -17,6 +17,29 @@ import time
 log = logging.getLogger("kuroko.sdkfix")
 
 
+def harden_sdk() -> None:
+    """Neutralize ReachyMini.__del__.
+
+    SDK 1.9.0's destructor calls a synchronous websocket close() that can hang
+    forever joining the socket's send thread (observed via py-spy: gc collected
+    an instance ~6s into a session and froze the entire process in
+    ws_client.disconnect). A long-lived bridge manages its connection lifecycle
+    explicitly; a best-effort destructor that can deadlock is strictly worse
+    than none. Call once before constructing ReachyMini.
+    """
+    from reachy_mini.reachy_mini import ReachyMini
+
+    if getattr(ReachyMini, "_kuroko_del_neutered", False):
+        return
+
+    def _safe_del(self) -> None:  # noqa: ANN001
+        log.debug("ReachyMini.__del__ suppressed (kuroko manages lifecycle)")
+
+    ReachyMini.__del__ = _safe_del
+    ReachyMini._kuroko_del_neutered = True
+    log.info("SDK hardened: ReachyMini.__del__ neutered")
+
+
 def ensure_audio_send_ready(media, timeout_s: float = 15.0,
                             retry_every_s: float = 1.0) -> bool:
     """Return True once the webrtc audio send chain is usable.

@@ -25,7 +25,7 @@ from reachy_mini import ReachyMini
 
 from .config import KurokoConfig
 from .puppet import PuppetTrack
-from .sdkfix import ensure_audio_send_ready
+from .sdkfix import ensure_audio_send_ready, harden_sdk
 
 MODEL_SR = 24000
 log = logging.getLogger("kuroko.bridge")
@@ -51,7 +51,10 @@ class VoiceBridge:
     # -- robot ---------------------------------------------------------------
 
     def connect_robot(self) -> None:
-        self.mini = ReachyMini(host=self.cfg.robot_host)
+        harden_sdk()
+        # explicit network mode: auto mode's failed localhost probe leaves
+        # debris whose gc collection froze the process (see sdkfix)
+        self.mini = ReachyMini(host=self.cfg.robot_host, connection_mode="network")
         self.media = self.mini.media
         in_sr = self.media.get_input_audio_samplerate()
         out_sr = self.media.get_output_audio_samplerate()
