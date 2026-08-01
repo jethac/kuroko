@@ -84,26 +84,63 @@ Three load-bearing ideas:
 
 ## Status
 
-Design + scaffold. The **first artifact to run is the loopback probe**, which answers
-the one question that can sink the topology (full-duplex remote media over 2.4 GHz at
-conversational latency, without stealing the daemon's mic from DoA):
+Running. Wake it with a phrase, talk to it, dismiss it.
 
 ```
-python -m probe.loopback --robot reachy-mini.local --minutes 10
+docker build -t kuroko . && ./voice VARF2 100      # on the inference box
 ```
 
-Roadmap:
-
-- [ ] **P0 — probe**: remote full-duplex loopback; RTT/jitter/loss histograms; DoA
-      liveness check. Go/no-go for the topology.
-- [ ] **P1 — voice loop**: `kuroko/bridge.py` — remote mic → sphn opus → PersonaPlex ws
-      → opus → remote speaker. No motion. Conversational parity with the web client.
-- [ ] **P2 — body**: playhead heartbeat, puppet track v0 (energy envelope), gaze
-      arbiter, wobble handoff.
-- [ ] **P3 — theater**: Pi reflex supervisor, banto lease scenes, session
-      reconstruction, flight recorder.
+- [x] **P0 — probe**: remote full-duplex loopback verified at ~19 ms p50, zero stalls
+      over 2.4 GHz wifi. DoA is *not* exposed over the remote media path (open issue).
+- [x] **P1 — voice loop**: `kuroko/bridge.py`. Conversational, and clock-disciplined
+      (see "The clock problem" below — this was the whole ballgame).
+- [x] **P2 — body**: puppet track → `kuroko/body.py` at 30 Hz through a single writer;
+      gaze arbiter with face-tracking confirmation.
+- [x] **lifecycle**: wake/sleep phrases, lookback pre-roll, idle end, catatonia recovery.
+- [ ] **P3 — theater**: Pi reflex supervisor, banto lease scenes, flight recorder.
 - [ ] **P4 — server tap**: fork-side sidecar channel (see `server/TAP.md`) for true
       lookahead: text tokens, turn logits, pre-playout energy.
+
+## The clock problem (read this before touching the audio path)
+
+PersonaPlex is a Moshi-architecture model: **frame arrival is its clock**. It consumes
+whatever shows up, as fast as it shows up. The Reachy's webrtc capture delivers
+0.52x–1.86x realtime second to second (std 0.328) plus a ~2x backlog dump on connect.
+Forwarding that as-received jerks the model's sense of time around and destroys its
+turn-taking — it monologues, talks over you, and reads as broken, while every log and
+byte counter looks perfectly healthy.
+
+So the bridge is a **clock master**: `capture_loop` fills a bounded jitter buffer and
+`pace_loop` emits exactly one 80 ms frame per 80 ms of wall clock (silence on underrun,
+drop-oldest on overflow, gentle 1.15x catch-up when deep). Watch `tx_fps` in the io log
+— it must sit at 12.5. If it drifts, conversation quality dies and nothing else will
+tell you why.
+
+Two more hard-won things:
+
+- **The robot's audio hardware is excellent — do not "fix" it.** The mic array's
+  hardware AEC strips the robot's own voice ~28 dB while leaving yours intact
+  (barge-in measured at +3.1 dB). Adding echo cancellation makes things worse.
+- **Probe with speech, never tones.** The mic DSP suppresses non-speech by design, so
+  a sine-wave test reports a dead microphone that is in fact perfectly healthy.
+
+## Conversation lifecycle
+
+A PersonaPlex session is a *bounded conversation*, not a permanent state. Left open, it
+takes the floor whenever it hears silence and eventually goes catatonic — emitting
+well-formed opus silence forever while byte counters keep climbing (observed at ~9 min).
+
+    dormant ──"hey mini"──► conversation ──"go to sleep" / 45 s idle──► dormant
+                                  └── stale / aged ──► fresh session
+
+The ears (`kuroko/listener.py`, vosk with a grammar constrained to just these phrases)
+run continuously, so phrases are configurable at runtime with no keyword-model
+training. A ring buffer records the whole time, so a woken session is seeded with what
+you already said instead of making you repeat yourself while it connects.
+
+> Phrases must be spelled with words the recognizer knows or they can never fire —
+> and fail silently. `reachy` is **not** in the small English model, hence the
+> phonetic stand-ins in the defaults. Check new phrases with `python -m probe.vocab`.
 
 ## Layout
 
