@@ -43,6 +43,9 @@ def main() -> None:
 
     media.start_recording()
     media.start_playing()
+    from kuroko.sdkfix import ensure_audio_send_ready
+    if not ensure_audio_send_ready(media):
+        print("WARNING: speaker send chain never became ready — loopback will be silent")
 
     rtts: list[float] = []
     gaps: list[float] = []

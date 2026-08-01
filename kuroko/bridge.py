@@ -25,6 +25,7 @@ from reachy_mini import ReachyMini
 
 from .config import KurokoConfig
 from .puppet import PuppetTrack
+from .sdkfix import ensure_audio_send_ready
 
 MODEL_SR = 24000
 log = logging.getLogger("kuroko.bridge")
@@ -58,6 +59,8 @@ class VoiceBridge:
             self.rs_up = soxr.ResampleStream(MODEL_SR, out_sr, 1, dtype="float32")
         self.media.start_recording()
         self.media.start_playing()
+        if not ensure_audio_send_ready(self.media):
+            raise RuntimeError("robot speaker path unavailable (webrtc send chain)")
         log.info(f"robot {self.cfg.robot_host}: mic {in_sr} Hz, speaker {out_sr} Hz")
 
     @staticmethod
