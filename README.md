@@ -8,6 +8,7 @@ brain lives next to the model.
 > multi-model scheduling deliberately live in its larger sibling, **kōken**, which
 > *drives* kuroko through the small control surface in `kuroko/control.py` rather than
 > replacing it. If you just want a robot that talks, you want this repo.
+> ([kōken lives here](https://github.com/jethac/koken) — design stage.)
 
 In kabuki, the *kuroko* are the black-clad stagehands who operate props and puppets in
 full view of the audience — and are, by convention, invisible. Here, the kuroko is a
