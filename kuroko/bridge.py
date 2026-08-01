@@ -90,16 +90,18 @@ class VoiceBridge:
                 # opus wants exact frame sizes; feed 80ms (1920 @ 24k) frames
                 self._mic_buf = np.concatenate((self._mic_buf, mono))
                 while self._mic_buf.size >= 1920:
-                    self.opus_w.append_pcm(self._mic_buf[:1920])
+                    frame = self._mic_buf[:1920]
                     self._mic_buf = self._mic_buf[1920:]
+                    await loop.run_in_executor(None, self.opus_w.append_pcm, frame)
                     self.stats["mic_chunks"] += 1
-            data = self.opus_w.read_bytes()
+            data = await loop.run_in_executor(None, self.opus_w.read_bytes)
             if data:
                 self.stats["tx_bytes"] += len(data)
                 await ws.send(b"\x01" + data)
             await asyncio.sleep(0.001)
 
     async def recv_loop(self, ws) -> None:
+        loop = asyncio.get_running_loop()
         pieces: list[str] = []
         async for msg in ws:
             if self.stop.is_set():
@@ -109,7 +111,7 @@ class VoiceBridge:
             kind = msg[0]
             if kind == 1:
                 self.stats["rx_bytes"] += len(msg) - 1
-                self.opus_r.append_bytes(bytes(msg[1:]))
+                await loop.run_in_executor(None, self.opus_r.append_bytes, bytes(msg[1:]))
             elif kind == 2:
                 piece = msg[1:].decode("utf-8", errors="replace")
                 pieces.append(piece)
