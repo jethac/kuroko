@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kuroko"
+version = "0.1.0"
+description = "Server-side puppeteer for Reachy Mini x PersonaPlex: the robot installs nothing; the brain lives next to the model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "reachy-mini",
+    "sphn",
+    "soxr",
+    "numpy",
+    "websockets",
+]
+keywords = ["reachy-mini", "personaplex", "robotics", "speech", "gb10"]
+
+[project.scripts]
+kuroko = "kuroko.__main__:main"
