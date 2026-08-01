@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# voice — restart kuroko with a different PersonaPlex voice (and optional volume).
+#
+#   ./voice                 list the voices and show what is running
+#   ./voice VARF3           switch to VARF3
+#   ./voice VARM1 90        switch voice and set speaker volume
+#
+# NAT* are natural/neutral reads; VAR* are more varied and expressive.
+# Female: NATF0-3, VARF0-4    Male: NATM0-3, VARM0-4
+set -euo pipefail
+
+ROBOT="${KUROKO_ROBOT_HOST:-192.168.1.128}"
+VOICE="${1:-}"
+VOLUME="${2:-}"
+
+if [ -z "$VOICE" ]; then
+  echo "voices: NATF0-3 NATM0-3 VARF0-4 VARM0-4"
+  echo "        (NAT = natural/neutral, VAR = more expressive)"
+  echo
+  echo "running now:"
+  docker inspect kuroko --format '  voice={{range .Config.Env}}{{if eq (index (split . "=") 0) "KUROKO_VOICE_PROMPT"}}{{index (split . "=") 1}}{{end}}{{end}}' 2>/dev/null || echo "  (kuroko not running)"
+  curl -s -m 3 "http://${ROBOT}:8000/api/volume/current" 2>/dev/null | sed 's/^/  /' || true
+  echo
+  exit 0
+fi
+
+docker rm -f kuroko >/dev/null 2>&1 || true
+docker run -d --name kuroko --network host --restart unless-stopped \
+  -e PYTHONUNBUFFERED=1 \
+  -e KUROKO_ROBOT_HOST="$ROBOT" \
+  -e KUROKO_VOICE_PROMPT="$VOICE" \
+  ${VOLUME:+-e KUROKO_SPEAKER_VOLUME="$VOLUME"} \
+  kuroko:latest >/dev/null
+
+echo "kuroko restarted with voice=$VOICE${VOLUME:+ volume=$VOLUME}"
+echo "give it ~15s to connect, then talk to the robot"
+echo "watch: docker logs -f kuroko 2>&1 | grep -E 'says|io \{'"

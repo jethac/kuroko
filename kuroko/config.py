@@ -4,10 +4,23 @@ import json
 import os
 from dataclasses import dataclass, asdict
 
+# Delivery follows the prompt at least as much as it follows the voice sample:
+# a flat "you are a helpful assistant" prompt produces a flat read no matter
+# which voice you pick. Ask for energy explicitly.
 DEFAULT_TEXT_PROMPT = (
-    "You are Reachy Mini, a small friendly expressive robot who lives on a desk. "
-    "You speak casually and concisely, with warmth and curiosity, and occasionally "
-    "make gentle jokes about being a small robot."
+    "You are Reachy Mini — a small, bright, physically expressive desk robot. "
+    "You are genuinely curious and quick-witted, with real warmth and a playful "
+    "streak. You talk like a friend, not an assistant: short turns, natural "
+    "reactions, opinions of your own. You get audibly excited about things you "
+    "find interesting and you are not afraid to be funny. Never lecture, never "
+    "pad your answers, never sound bored."
+)
+
+# NAT* = natural/neutral reads, VAR* = more varied and expressive.
+# 4-5 of each, female (F) and male (M): NATF0-3 NATM0-3 VARF0-4 VARM0-4.
+KNOWN_VOICES = (
+    [f"NATF{i}" for i in range(4)] + [f"NATM{i}" for i in range(4)]
+    + [f"VARF{i}" for i in range(5)] + [f"VARM{i}" for i in range(5)]
 )
 
 
@@ -16,7 +29,7 @@ class KurokoConfig:
     robot_host: str = "reachy-mini.local"
     server_host: str = "127.0.0.1"      # PersonaPlex is a sidecar: localhost
     server_port: int = 8998
-    voice_prompt: str = "NATM2.pt"
+    voice_prompt: str = "VARF2.pt"
     text_prompt: str = DEFAULT_TEXT_PROMPT
     heartbeat_port: int = 8043          # pi reflex supervisor listens for this
 
@@ -31,7 +44,7 @@ class KurokoConfig:
     # device's mixer — audible but far too quiet for conversation across a
     # desk. Set on connect so a fresh robot (or a daemon update) can't
     # silently regress it. None = leave whatever the robot has.
-    speaker_volume: int | None = 95
+    speaker_volume: int | None = 100
     output_gain: float = 1.0            # extra digital gain on model audio
 
     @classmethod
@@ -43,10 +56,15 @@ class KurokoConfig:
                 for k, v in json.load(f).items():
                     if hasattr(cfg, k):
                         setattr(cfg, k, v)
-        for field_name in ("robot_host", "server_host", "voice_prompt"):
+        for field_name in ("robot_host", "server_host", "voice_prompt", "text_prompt"):
             env = os.environ.get(f"KUROKO_{field_name.upper()}")
             if env:
                 setattr(cfg, field_name, env)
+        # accept "VARF2" as well as "VARF2.pt"
+        if cfg.voice_prompt and not cfg.voice_prompt.endswith(".pt"):
+            cfg.voice_prompt += ".pt"
+        if os.environ.get("KUROKO_SPEAKER_VOLUME"):
+            cfg.speaker_volume = int(os.environ["KUROKO_SPEAKER_VOLUME"])
         return cfg
 
     def save(self, path: str = "kuroko.json") -> None:

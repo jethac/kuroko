@@ -231,9 +231,12 @@ class VoiceBridge:
             out = np.asarray(pcm, dtype=np.float32)
             if self.cfg.output_gain != 1.0:
                 out = np.clip(out * self.cfg.output_gain, -1.0, 1.0)
-            # track the level we actually emit, so "too quiet" is measurable
+            # Track the LOUDEST chunk in the window, not the latest — most
+            # chunks are inter-word silence, which made this read 0.0 and
+            # look like a dead speaker path.
             if out.size:
-                self.stats["out_rms"] = round(float(np.sqrt(np.mean(np.square(out)))), 4)
+                lvl = float(np.abs(out).max())
+                self.stats["out_peak"] = round(max(self.stats.get("out_peak", 0.0), lvl), 3)
             if self.puppet is not None:
                 # v0 embodiment: energy envelope of audio just before playout.
                 # P4 replaces this with the server tap's pre-playout sidecar.
