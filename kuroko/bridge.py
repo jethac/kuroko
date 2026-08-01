@@ -76,8 +76,10 @@ class VoiceBridge:
     # -- loops ---------------------------------------------------------------
 
     async def mic_loop(self, ws) -> None:
+        loop = asyncio.get_running_loop()
         while not self.stop.is_set():
-            pcm = self.media.get_audio_sample()
+            # native call may block; keep it off the event loop
+            pcm = await loop.run_in_executor(None, self.media.get_audio_sample)
             if pcm is None or np.size(pcm) == 0:
                 await asyncio.sleep(0.004)
                 continue
@@ -119,8 +121,11 @@ class VoiceBridge:
         self.stop.set()
 
     async def play_loop(self) -> None:
+        loop = asyncio.get_running_loop()
         while not self.stop.is_set():
-            pcm = self.opus_r.read_pcm()
+            # sphn read_pcm blocks when the stream is empty; executor keeps
+            # the event loop alive (learned the hard way)
+            pcm = await loop.run_in_executor(None, self.opus_r.read_pcm)
             if pcm is None or pcm.size == 0:
                 await asyncio.sleep(0.004)
                 continue
@@ -132,7 +137,7 @@ class VoiceBridge:
             if self.rs_up is not None:
                 out = self.rs_up.resample_chunk(out)
             if out.size:
-                self.media.push_audio_sample(out)
+                await loop.run_in_executor(None, self.media.push_audio_sample, out)
                 self.frames_played += 1
                 self.stats["spk_chunks"] += 1
 
