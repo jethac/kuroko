@@ -16,6 +16,20 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}" \
     CMAKE_POLICY_VERSION_MINIMUM=3.5
 
+# The reachy_mini SDK's remote media path uses webrtcsrc from gst-plugins-rs,
+# which no distro packages. Build it once here; the robot never compiles anything.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev libglib2.0-dev libssl-dev nasm \
+    && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-c --locked
+RUN git clone --depth 1 -b 0.12.11 \
+      https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git /tmp/gpr \
+    && cd /tmp/gpr \
+    && cargo cbuild -p gst-plugin-webrtc -p gst-plugin-rtp --release \
+    && cargo cinstall -p gst-plugin-webrtc -p gst-plugin-rtp --release --prefix /usr \
+    && rm -rf /tmp/gpr /root/.cargo/registry
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY kuroko/ kuroko/
