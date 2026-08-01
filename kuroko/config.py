@@ -65,6 +65,11 @@ class KurokoConfig:
     max_session_s: float = 240.0        # preempt context exhaustion...
     quiet_recycle_s: float = 8.0        # ...but only during a lull
 
+    # Embodiment: kuroko drives the head itself (single writer) from the
+    # puppet track, with the daemon's own wobbling disabled to avoid two
+    # controllers fighting over the same joints.
+    embodiment: bool = True
+
     # Output level. The robot ships at volume 62, which is -23 dB on this
     # device's mixer — far too quiet for conversation across a desk. Set on
     # connect so a fresh robot (or a daemon update) can't silently regress it.

@@ -25,6 +25,7 @@ import websockets
 
 from reachy_mini import ReachyMini
 
+from .body import Body
 from .config import KurokoConfig
 from .listener import PhraseListener
 from .puppet import PuppetTrack
@@ -65,6 +66,7 @@ class VoiceBridge:
         # seconds, so a freshly woken session starts already knowing what the
         # user said while it was connecting.
         self._ring = np.zeros(0, dtype=np.float32)
+        self.body: Body | None = None
 
     # -- robot ---------------------------------------------------------------
 
@@ -100,6 +102,17 @@ class VoiceBridge:
         if not ensure_audio_send_ready(self.media):
             raise RuntimeError("robot speaker path unavailable (webrtc send chain)")
         log.info(f"robot {self.cfg.robot_host}: mic {in_sr} Hz, speaker {out_sr} Hz")
+
+        if self.puppet is not None and self.cfg.embodiment:
+            self.body = Body(self.mini, self.puppet)
+            # Single-writer rule: the daemon's wobbling would fight our pose
+            # stream on the same joints. Face tracking stays on, but only as a
+            # sensor for the gaze arbiter — it must not drive the head itself.
+            for off in ("disable_wobbling", "stop_head_tracking"):
+                try:
+                    getattr(self.mini, off)()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("%s: %s", off, e)
 
     @staticmethod
     def _mono(pcm: np.ndarray) -> np.ndarray:
@@ -462,6 +475,12 @@ class VoiceBridge:
 
         capture = asyncio.create_task(self.capture_loop())
         capture.add_done_callback(self._task_died)
+        body_tasks = []
+        if self.body is not None:
+            body_tasks = [asyncio.create_task(self.body.run(self.stop)),
+                          asyncio.create_task(self.body.watch_face(self.stop))]
+            for t in body_tasks:
+                t.add_done_callback(self._task_died)
         backoff = 1.0
         try:
             while not self.stop.is_set():
@@ -478,3 +497,5 @@ class VoiceBridge:
                     backoff = min(backoff * 2, 30.0)
         finally:
             capture.cancel()
+            for t in body_tasks:
+                t.cancel()
