@@ -27,6 +27,7 @@ from reachy_mini import ReachyMini
 
 from .body import Body
 from .config import KurokoConfig
+from .control import ControlMixin
 from .listener import PhraseListener
 from .puppet import PuppetTrack
 from .sdkfix import ensure_audio_send_ready, harden_sdk
@@ -36,8 +37,12 @@ FRAME_MS = 80          # one Mimi frame
 log = logging.getLogger("kuroko.bridge")
 
 
-class VoiceBridge:
-    """Owns the audio path and the PersonaPlex session for one robot."""
+class VoiceBridge(ControlMixin):
+    """Owns the audio path and the PersonaPlex session for one robot.
+
+    See `kuroko.control.SessionControl` for the public surface a driver (such
+    as the kōken orchestrator) uses to suspend, resume, inject and observe.
+    """
 
     def __init__(self, cfg: KurokoConfig, puppet: PuppetTrack | None = None):
         self.cfg = cfg
@@ -69,6 +74,8 @@ class VoiceBridge:
         self.body: Body | None = None
         self.wake_event = asyncio.Event()
         self.gated = False
+        self._text_subscribers = []
+        self._suspended_reason = ""
 
     # -- robot ---------------------------------------------------------------
 
@@ -341,6 +348,7 @@ class VoiceBridge:
                 await loop.run_in_executor(None, self.opus_r.append_bytes, bytes(msg[1:]))
             elif kind == 2:
                 piece = msg[1:].decode("utf-8", errors="replace")
+                self._emit_text(piece)
                 pieces.append(piece)
                 if self.puppet is not None:
                     self.puppet.on_text(piece)

@@ -3,6 +3,12 @@
 **Server-side puppeteer for Reachy Mini × PersonaPlex.** The robot installs nothing; the
 brain lives next to the model.
 
+> **Scope.** kuroko does one thing: PersonaPlex, one Reachy Mini, done well — realtime
+> audio, conversation lifecycle, embodiment. Knowledge back-ends, model arbitration and
+> multi-model scheduling deliberately live in its larger sibling, **kōken**, which
+> *drives* kuroko through the small control surface in `kuroko/control.py` rather than
+> replacing it. If you just want a robot that talks, you want this repo.
+
 In kabuki, the *kuroko* are the black-clad stagehands who operate props and puppets in
 full view of the audience — and are, by convention, invisible. Here, the kuroko is a
 sidecar process on the inference box (an NVIDIA GB10 / DGX Spark class machine) that
@@ -141,6 +147,25 @@ you already said instead of making you repeat yourself while it connects.
 > Phrases must be spelled with words the recognizer knows or they can never fire —
 > and fail silently. `reachy` is **not** in the small English model, hence the
 > phonetic stand-ins in the defaults. Check new phrases with `python -m probe.vocab`.
+
+## Driving kuroko from something bigger
+
+`kuroko/control.py` is the whole public surface — four operations, none of which
+require knowing how the audio path works:
+
+```python
+bridge.suspend("looking something up")   # model freezes, keeps full context
+bridge.inject(answer_pcm_24k)            # heard by the MODEL only
+bridge.play(hold_music, sample_rate=16000)  # heard by the HUMAN only
+bridge.resume()                          # model never knew it stopped
+bridge.on_text(lambda piece: ...)        # model's text, before its audio plays
+```
+
+The two audio paths are genuinely independent, which is what makes a "hold" possible:
+music can cover a pause for the human while an answer is fed to the model that the
+human never hears. And suspension is free — the serve loop only advances the model when
+frames arrive, so a suspended session experiences *zero elapsed time* and resumes with
+full context and no reconstruction.
 
 ## Layout
 
