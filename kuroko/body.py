@@ -98,18 +98,45 @@ class Body:
             self._fail(e)
 
     def _fail(self, e: Exception) -> None:
-        log.warning("motion disabled after error: %s", e)
-        self._ok = False
+        # One bad write should not permanently paralyse the robot, but a
+        # broken control channel should not be hammered 30x/second either.
+        self._fails = getattr(self, "_fails", 0) + 1
+        if self._fails >= 5:
+            log.warning("motion paused after %d errors (last: %s)", self._fails, e)
+            self._ok = False
+            self._fails = 0
+        else:
+            log.debug("motion write failed: %s", e)
 
-    async def run(self, stop: asyncio.Event) -> None:
-        """Fixed-rate control loop; never raises into the audio path."""
+    async def run(self, stop: asyncio.Event, active: asyncio.Event) -> None:
+        """Fixed-rate control loop; never raises into the audio path.
+
+        Only drives while `active` is set — i.e. during a conversation. While
+        dormant the robot is parked asleep, and posting poses at it both
+        fights that pose and errors out ("Lost connection with the server"),
+        so we simply stay quiet and let it rest.
+        """
         period = 1.0 / CONTROL_HZ
         loop = asyncio.get_running_loop()
         next_t = loop.time()
         log.info("body control loop at %.0f Hz", CONTROL_HZ)
+        was_active = False
         while not stop.is_set():
             next_t += period
             await asyncio.sleep(max(0.0, next_t - loop.time()))
+            if not active.is_set():
+                if was_active:
+                    log.info("body idle (conversation ended)")
+                    was_active = False
+                # reset channels so the next conversation starts from rest
+                self.wobble = 0.0
+                self.antenna = 0.5
+                self.puppet.keyframes.clear()
+                continue
+            if not was_active:
+                was_active = True
+                self._ok = True          # give motion a fresh chance each time
+                log.info("body active")
             now = time.monotonic()
             self._apply_keyframes(now)
             # decay toward rest so the robot settles when nothing is happening
@@ -118,11 +145,13 @@ class Body:
             roll, pitch, yaw = self._pose(now)
             await loop.run_in_executor(None, self._write, roll, pitch, yaw)
 
-    async def watch_face(self, stop: asyncio.Event) -> None:
+    async def watch_face(self, stop: asyncio.Event, active: asyncio.Event) -> None:
         """Feed the daemon's face tracker into the arbiter as a sensor."""
         loop = asyncio.get_running_loop()
         while not stop.is_set():
             await asyncio.sleep(0.2)
+            if not active.is_set():
+                continue
             try:
                 face = await loop.run_in_executor(
                     None, lambda: self.mini.get_tracked_face(wait=False))

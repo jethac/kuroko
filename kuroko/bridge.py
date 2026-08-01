@@ -441,9 +441,10 @@ class VoiceBridge:
         self.opus_w = sphn.OpusStreamWriter(MODEL_SR)
         self.opus_r = sphn.OpusStreamReader(MODEL_SR)
         self._mic_buf = np.zeros(0, dtype=np.float32)
-        self.handshake = asyncio.Event()
-        self.streaming = asyncio.Event()
-        self.session_stop = asyncio.Event()
+        # clear(), never reassign: long-lived tasks hold these objects
+        self.handshake.clear()
+        self.streaming.clear()
+        self.session_stop.clear()
         self.end_reason = None
         if self.in_sr != MODEL_SR:
             self.rs_down = soxr.ResampleStream(self.in_sr, MODEL_SR, 1, dtype="float32")
@@ -477,8 +478,9 @@ class VoiceBridge:
         capture.add_done_callback(self._task_died)
         body_tasks = []
         if self.body is not None:
-            body_tasks = [asyncio.create_task(self.body.run(self.stop)),
-                          asyncio.create_task(self.body.watch_face(self.stop))]
+            body_tasks = [
+                asyncio.create_task(self.body.run(self.stop, self.streaming)),
+                asyncio.create_task(self.body.watch_face(self.stop, self.streaming))]
             for t in body_tasks:
                 t.add_done_callback(self._task_died)
         backoff = 1.0
