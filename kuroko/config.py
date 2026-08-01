@@ -57,8 +57,15 @@ class KurokoConfig:
     wake_phrases: tuple[str, ...] = ("hey mini", "okay mini", "hey robot",
                                      "hey ritchie", "hey richie", "hey reach",
                                      "hey peachy", "hey beachy")
-    sleep_phrases: tuple[str, ...] = ("go to sleep", "goodbye",
-                                      "that is all", "never mind")
+    # Spellings are what the RECOGNIZER emits, not what you would write:
+    # "that's all" comes back as "thats all" (no apostrophe in the lexicon).
+    sleep_phrases: tuple[str, ...] = ("go to sleep", "goodbye", "goodnight",
+                                      "thats all", "that is all", "thats enough",
+                                      "were done", "we are done", "never mind")
+    # Dismissal should be a farewell, not a hangup: let the model answer the
+    # dismissal it just heard, then close once it has finished speaking.
+    ack_quiet_s: float = 1.2            # silence that counts as "finished"
+    ack_timeout_s: float = 8.0          # give up waiting for a sign-off
     conversation_idle_s: float = 45.0   # no one has spoken -> end conversation
     user_speech_level: float = 0.05     # mic peak that counts as someone talking
     catatonia_s: float = 75.0           # no model output at all -> recycle

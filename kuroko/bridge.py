@@ -426,14 +426,38 @@ class VoiceBridge:
             await asyncio.sleep(0.05)
 
     async def dismissal_loop(self) -> None:
-        """End the conversation when the user dismisses the robot."""
+        """End the conversation when dismissed — after the robot signs off.
+
+        Cutting the session the instant the phrase lands chops the robot off
+        mid-breath, which reads as a crash rather than a goodbye. The model
+        has already heard the dismissal in the audio stream and will answer it
+        naturally ("sure, talk later"), so mark the session as ending and wait
+        for that reply to finish before closing. Bounded by ack_timeout_s so a
+        model that says nothing cannot keep the session open.
+        """
         while self.alive():
-            if self.listener.poll() == "sleep":
-                log.info("dismissed by phrase — ending conversation")
-                self.end_reason = "dismissed"
-                self.session_stop.set()
-                return
-            await asyncio.sleep(0.05)
+            if self.listener.poll() != "sleep":
+                await asyncio.sleep(0.05)
+                continue
+
+            log.info("dismissed — letting the robot sign off")
+            self.end_reason = "dismissed"
+            t0 = time.monotonic()
+            spoke = False
+            while self.alive():
+                await asyncio.sleep(0.1)
+                quiet = time.monotonic() - self.last_activity
+                if quiet < 0.5:
+                    spoke = True                      # it is answering
+                if spoke and quiet > self.cfg.ack_quiet_s:
+                    log.info("sign-off complete — going dormant")
+                    break
+                if time.monotonic() - t0 > self.cfg.ack_timeout_s:
+                    log.info("no sign-off within %.0fs — closing anyway",
+                             self.cfg.ack_timeout_s)
+                    break
+            self.session_stop.set()
+            return
 
     async def run_session(self) -> None:
         """One bounded conversation."""
