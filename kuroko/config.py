@@ -76,10 +76,11 @@ class KurokoConfig:
     # controllers fighting over the same joints.
     embodiment: bool = True
 
-    # Output level. The robot ships at volume 62, which is -23 dB on this
-    # device's mixer — far too quiet for conversation across a desk. Set on
-    # connect so a fresh robot (or a daemon update) can't silently regress it.
-    speaker_volume: int | None = 100
+    # Output level, set on connect so a fresh robot (or a daemon update) can't
+    # silently change it. Note this interacts with output_gain below: the
+    # robot shipped at 62 and was too quiet at unity gain, but with 2.2x
+    # digital gain applied it is comfortable much lower.
+    speaker_volume: int | None = 50
     # PersonaPlex output peaks around 0.36 of full scale, so with the hardware
     # volume already maxed there is ~9 dB of digital headroom going unused.
     # 2.2x lands peaks near 0.8; the play path clips-guards anyway.
