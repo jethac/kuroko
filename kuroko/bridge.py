@@ -193,18 +193,19 @@ class VoiceBridge:
         log.info("session warm (prompts loaded)")
 
         if self.gated:
-            try:
-                self.mini.goto_sleep()
-            except Exception as e:  # noqa: BLE001
-                log.debug("goto_sleep: %s", e)
+            loop = asyncio.get_running_loop()
+            # goto_sleep/wake_up take ~5 s each and are SYNCHRONOUS: calling
+            # them inline stalls capture and the phrase listener along with
+            # everything else. Always run them off the event loop.
+            await loop.run_in_executor(None, self._posture, "goto_sleep")
             log.info("dormant — say one of %s", list(self.cfg.wake_phrases))
             await self.wake_event.wait()
             if not self.alive():
                 return
-            try:
-                self.mini.wake_up()
-            except Exception as e:  # noqa: BLE001
-                log.debug("wake_up: %s", e)
+            # Fire-and-forget: the gate should open the instant the phrase
+            # lands, with the robot physically waking in parallel. Awaiting it
+            # here would hand back the whole latency we just saved.
+            loop.run_in_executor(None, self._posture, "wake_up")
 
         # No drain here: capture runs for the life of the process, so there is
         # no per-session backlog to discard — the pre-roll IS the backlog, and
@@ -213,6 +214,12 @@ class VoiceBridge:
         self.last_user_speech = time.monotonic()
         self.streaming.set()
         log.info("listening")
+
+    def _posture(self, name: str) -> None:
+        try:
+            getattr(self.mini, name)()
+        except Exception as e:  # noqa: BLE001
+            log.debug("%s: %s", name, e)
 
     async def wake_loop(self) -> None:
         """Watch for the wake phrase while the session is warm."""
