@@ -46,6 +46,7 @@ class VoiceBridge:
         self.rs_up = None    # 24k -> speaker sr
         self.frames_played = 0  # crude playhead in model frames
         self.stats = {"mic_chunks": 0, "tx_bytes": 0, "rx_bytes": 0, "spk_chunks": 0}
+        self._mic_buf = np.zeros(0, dtype=np.float32)
 
     # -- robot ---------------------------------------------------------------
 
@@ -84,8 +85,12 @@ class VoiceBridge:
             if self.rs_down is not None:
                 mono = self.rs_down.resample_chunk(mono)
             if mono.size:
-                self.opus_w.append_pcm(mono)
-                self.stats["mic_chunks"] += 1
+                # opus wants exact frame sizes; feed 80ms (1920 @ 24k) frames
+                self._mic_buf = np.concatenate((self._mic_buf, mono))
+                while self._mic_buf.size >= 1920:
+                    self.opus_w.append_pcm(self._mic_buf[:1920])
+                    self._mic_buf = self._mic_buf[1920:]
+                    self.stats["mic_chunks"] += 1
             data = self.opus_w.read_bytes()
             if data:
                 self.stats["tx_bytes"] += len(data)
