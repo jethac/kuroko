@@ -30,6 +30,17 @@ RUN git clone --depth 1 -b 0.12.11 \
     && cargo cinstall -p gst-plugin-webrtc -p gst-plugin-rtp --release --prefix /usr \
     && rm -rf /tmp/gpr /root/.cargo/registry
 
+# Offline phrase spotting for wake/sleep words. Vosk rather than a wake-word
+# engine because the phrase must be configurable at runtime: keyword engines
+# need a trained model per word, a grammar-constrained recognizer does not.
+RUN pip install --no-cache-dir vosk==0.3.45 \
+    && mkdir -p /models \
+    && curl -sSL -o /tmp/v.zip \
+       https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip \
+    && python -c "import zipfile;zipfile.ZipFile('/tmp/v.zip').extractall('/models')" \
+    && mv /models/vosk-model-small-en-us-0.15 /models/vosk \
+    && rm /tmp/v.zip
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY kuroko/ kuroko/

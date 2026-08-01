@@ -40,10 +40,28 @@ class KurokoConfig:
     prefill_ms: int = 240               # cushion before the pacer starts pulling
     max_buffer_ms: int = 600            # cap added mouth-to-ear latency
 
+    # --- conversation lifecycle -------------------------------------------
+    # A PersonaPlex session is a bounded conversation, not a permanent state.
+    # Left open it talks to an empty room and eventually goes catatonic
+    # (emits well-formed silence forever, ~9 min observed). So: wake on a
+    # phrase, converse, then end on dismissal or silence and go dormant.
+    wake_enabled: bool = True
+    # Always-on lookback so a woken session already knows what was just said,
+    # instead of making the user repeat themselves while it connects.
+    lookback_s: float = 8.0
+    catchup_rate: float = 1.15          # drain a deep buffer 15% fast, then 1x
+    wake_phrases: tuple[str, ...] = ("hey reachy", "hey mini", "okay reachy")
+    sleep_phrases: tuple[str, ...] = ("go to sleep", "goodbye reachy",
+                                      "that's all", "nevermind")
+    conversation_idle_s: float = 45.0   # no one has spoken -> end conversation
+    user_speech_level: float = 0.05     # mic peak that counts as someone talking
+    catatonia_s: float = 75.0           # no model output at all -> recycle
+    max_session_s: float = 240.0        # preempt context exhaustion...
+    quiet_recycle_s: float = 8.0        # ...but only during a lull
+
     # Output level. The robot ships at volume 62, which is -23 dB on this
-    # device's mixer — audible but far too quiet for conversation across a
-    # desk. Set on connect so a fresh robot (or a daemon update) can't
-    # silently regress it. None = leave whatever the robot has.
+    # device's mixer — far too quiet for conversation across a desk. Set on
+    # connect so a fresh robot (or a daemon update) can't silently regress it.
     speaker_volume: int | None = 100
     # PersonaPlex output peaks around 0.36 of full scale, so with the hardware
     # volume already maxed there is ~9 dB of digital headroom going unused.
@@ -70,6 +88,14 @@ class KurokoConfig:
             cfg.speaker_volume = int(os.environ["KUROKO_SPEAKER_VOLUME"])
         if os.environ.get("KUROKO_OUTPUT_GAIN"):
             cfg.output_gain = float(os.environ["KUROKO_OUTPUT_GAIN"])
+        if os.environ.get("KUROKO_WAKE_PHRASES"):
+            cfg.wake_phrases = tuple(
+                p.strip() for p in os.environ["KUROKO_WAKE_PHRASES"].split(",") if p.strip())
+        if os.environ.get("KUROKO_SLEEP_PHRASES"):
+            cfg.sleep_phrases = tuple(
+                p.strip() for p in os.environ["KUROKO_SLEEP_PHRASES"].split(",") if p.strip())
+        if os.environ.get("KUROKO_WAKE_ENABLED"):
+            cfg.wake_enabled = os.environ["KUROKO_WAKE_ENABLED"].lower() not in ("0", "false", "no")
         return cfg
 
     def save(self, path: str = "kuroko.json") -> None:
