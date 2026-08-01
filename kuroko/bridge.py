@@ -28,6 +28,7 @@ from .puppet import PuppetTrack
 from .sdkfix import ensure_audio_send_ready, harden_sdk
 
 MODEL_SR = 24000
+FRAME_MS = 80          # one Mimi frame
 log = logging.getLogger("kuroko.bridge")
 
 
@@ -45,9 +46,11 @@ class VoiceBridge:
         self.rs_down = None  # mic sr -> 24k
         self.rs_up = None    # 24k -> speaker sr
         self.frames_played = 0  # crude playhead in model frames
-        self.stats = {"mic_chunks": 0, "tx_bytes": 0, "rx_bytes": 0, "spk_chunks": 0}
+        self.stats = {"mic_chunks": 0, "tx_bytes": 0, "rx_bytes": 0, "spk_chunks": 0,
+                      "underruns": 0, "dropped": 0, "buf_ms": 0}
         self._mic_buf = np.zeros(0, dtype=np.float32)
         self.handshake = asyncio.Event()
+        self.streaming = asyncio.Event()
 
     # -- robot ---------------------------------------------------------------
 
@@ -80,12 +83,29 @@ class VoiceBridge:
     # -- loops ---------------------------------------------------------------
 
     async def mic_loop(self, ws) -> None:
+        """Capture only: robot mic -> resample -> jitter buffer.
+
+        Deliberately does NOT send. The robot's webrtc delivery is bursty
+        (measured: 0.52x realtime for a second, then 1.86x to catch up, plus a
+        2x backlog dump on connect). Forwarding that straight to the model
+        jerks its clock around, because frame arrival IS the model's clock.
+        `pace_loop` is the one that sends, on a strict wall clock.
+        """
         loop = asyncio.get_running_loop()
         # The server discards all incoming messages until it sends its \x00
         # handshake (system-prompt loading). Anything sent earlier — including
         # the opus stream header — is eaten and the stream never syncs.
         await self.handshake.wait()
-        log.info("handshake received — mic stream starting")
+
+        # Drop the jitter buffer's startup backlog rather than shipping it as
+        # a burst the model would experience as time compression.
+        t_drain = asyncio.get_running_loop().time() + self.cfg.drain_seconds
+        while asyncio.get_running_loop().time() < t_drain and not self.stop.is_set():
+            await loop.run_in_executor(None, self.media.get_audio_sample)
+            await asyncio.sleep(0.002)
+        log.info("startup backlog drained — streaming at wall clock")
+        self.streaming.set()
+
         while not self.stop.is_set():
             # native call may block; keep it off the event loop
             pcm = await loop.run_in_executor(None, self.media.get_audio_sample)
@@ -96,18 +116,58 @@ class VoiceBridge:
             if self.rs_down is not None:
                 mono = self.rs_down.resample_chunk(mono)
             if mono.size:
-                # opus wants exact frame sizes; feed 80ms (1920 @ 24k) frames
                 self._mic_buf = np.concatenate((self._mic_buf, mono))
-                while self._mic_buf.size >= 1920:
-                    frame = self._mic_buf[:1920]
-                    self._mic_buf = self._mic_buf[1920:]
-                    await loop.run_in_executor(None, self.opus_w.append_pcm, frame)
-                    self.stats["mic_chunks"] += 1
+                # Bound latency: if the robot has burst far ahead, discard the
+                # oldest audio rather than let mouth-to-ear delay grow forever.
+                max_samples = int(self.cfg.max_buffer_ms * MODEL_SR / 1000)
+                if self._mic_buf.size > max_samples:
+                    self.stats["dropped"] += self._mic_buf.size - max_samples
+                    self._mic_buf = self._mic_buf[-max_samples:]
+            await asyncio.sleep(0.001)
+
+    async def pace_loop(self, ws) -> None:
+        """Send exactly one 80 ms frame per 80 ms of wall clock.
+
+        This is the fix for the bursty capture path: the model receives a
+        perfectly regular stream regardless of how the robot delivers it.
+        Underruns are filled with silence (the model must never stall waiting
+        for us); surplus is absorbed by the buffer and, at the limit, dropped
+        in mic_loop.
+        """
+        loop = asyncio.get_running_loop()
+        await self.streaming.wait()
+        frame = int(MODEL_SR * FRAME_MS / 1000)   # 1920 samples @ 24 kHz
+        period = FRAME_MS / 1000.0
+        next_deadline = loop.time()
+
+        while not self.stop.is_set():
+            next_deadline += period
+            delay = next_deadline - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            elif delay < -0.5:
+                # We fell badly behind (e.g. host hiccup); resync rather than
+                # sprint to catch up, which would re-create the burst problem.
+                log.warning("pacer %.0f ms behind — resyncing clock", -delay * 1000)
+                next_deadline = loop.time()
+
+            if self._mic_buf.size >= frame:
+                chunk = self._mic_buf[:frame]
+                self._mic_buf = self._mic_buf[frame:]
+            else:
+                chunk = np.zeros(frame, dtype=np.float32)
+                if self._mic_buf.size:
+                    chunk[:self._mic_buf.size] = self._mic_buf
+                    self._mic_buf = np.zeros(0, dtype=np.float32)
+                self.stats["underruns"] += 1
+
+            self.stats["buf_ms"] = int(1000 * self._mic_buf.size / MODEL_SR)
+            await loop.run_in_executor(None, self.opus_w.append_pcm, chunk)
+            self.stats["mic_chunks"] += 1
             data = await loop.run_in_executor(None, self.opus_w.read_bytes)
             if data:
                 self.stats["tx_bytes"] += len(data)
                 await ws.send(b"\x01" + data)
-            await asyncio.sleep(0.001)
 
     async def recv_loop(self, ws) -> None:
         loop = asyncio.get_running_loop()
@@ -163,9 +223,15 @@ class VoiceBridge:
             self.stop.set()
 
     async def _stats_loop(self) -> None:
+        prev = dict(self.stats)
         while not self.stop.is_set():
             await asyncio.sleep(5)
-            log.info("io %s", self.stats)
+            # frames/s should sit at 12.5 (one 80 ms frame per 80 ms) if the
+            # pacer is doing its job; drift here means the clock is slipping.
+            fps = (self.stats["mic_chunks"] - prev.get("mic_chunks", 0)) / 5.0
+            log.info("io %s  tx_fps=%.1f (target %.1f)",
+                     self.stats, fps, 1000.0 / FRAME_MS)
+            prev = dict(self.stats)
 
     # -- session -------------------------------------------------------------
 
@@ -185,12 +251,14 @@ class VoiceBridge:
                 self.opus_r = sphn.OpusStreamReader(MODEL_SR)
                 self._mic_buf = np.zeros(0, dtype=np.float32)
                 self.handshake = asyncio.Event()
+                self.streaming = asyncio.Event()
                 async with websockets.connect(self._url(), max_size=None) as ws:
                     log.info("personaplex session open")
                     backoff = 1.0
                     tasks = [asyncio.create_task(t) for t in
-                             (self.mic_loop(ws), self.recv_loop(ws),
-                              self.play_loop(), self._stats_loop())]
+                             (self.mic_loop(ws), self.pace_loop(ws),
+                              self.recv_loop(ws), self.play_loop(),
+                              self._stats_loop())]
                     for t in tasks:
                         t.add_done_callback(self._task_died)
                     await self.stop.wait()
